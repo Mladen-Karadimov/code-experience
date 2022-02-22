@@ -1,0 +1,40 @@
+node {
+    env.REPOSITORY = 'git@github.com:dummy/dummy-some-proxy.git'
+    env.NODEJS_HOME = "${tool 'Node12'}"
+    env.PATH="${env.NODEJS_HOME}/bin:${env.PATH}"
+
+    properties([
+        parameters([
+            choice(name: 'Environment', choices: [ 'dev', 'stage', 'prod' ]),
+            gitParameter(branch: '',
+                         branchFilter: 'origin/(.*)',
+                         defaultValue: 'master',
+                         description: '',
+                         name: 'BRANCH',
+                         quickFilterEnabled: false,
+                         selectedValue: 'NONE',
+                         sortMode: 'ASCENDING_SMART',
+                         tagFilter: '*',
+                         type: 'PT_BRANCH',
+                         listSize: '1')
+        ])
+    ])
+
+    currentBuild.displayName = "#${currentBuild.number} - ${env.Environment} - ${params.BRANCH}"
+
+    stage('Checkout') {
+        sh "rm -rf *"
+        git branch: "${params.BRANCH}", url: "${env.REPOSITORY}"
+    }
+
+    stage('Prepare') {
+        sh "npm install -g aws-cdk"
+        sh "npm install" 
+    }
+
+    stage('Deploy') {
+        withEnv(["CDK_DEPLOY_ENV=${env.Environment}"]) {
+            sh "cdk deploy --require-approval never"
+        }
+    }
+}

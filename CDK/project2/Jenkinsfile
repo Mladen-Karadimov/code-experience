@@ -1,0 +1,89 @@
+node {
+    env.REPOSITORY = 'git@github.com:dummy/dummy-somes-app.git'
+    env.NODEJS_HOME = "${tool 'Node12'}"
+    env.PATH="${env.NODEJS_HOME}/bin:${env.PATH}"
+
+    properties([
+        parameters([
+            choice(name: 'Environment', choices: [ 'dev', 'stage', 'prod' ]),
+            gitParameter(branch: '',
+                         branchFilter: 'origin/(.*)',
+                         defaultValue: 'master',
+                         description: '',
+                         name: 'BRANCH',
+                         quickFilterEnabled: false,
+                         selectedValue: 'NONE',
+                         sortMode: 'ASCENDING_SMART',
+                         tagFilter: '*',
+                         type: 'PT_BRANCH',
+                         listSize: '1')
+        ])
+    ])
+
+    //domain
+    backendDomain = env.Environment == 'prod' ? "https://somes-app-prod-api.dummy.com" : "https://somes-app-${env.Environment}-api.dummy.org"
+    //backendDomain = "https://somes-app-${env.Environment}-api.dummy.systems"
+
+    currentBuild.displayName = "#${currentBuild.number} - ${env.Environment} - ${params.BRANCH}"
+
+    stage('Checkout') {
+        sh "rm -rf *"
+        git branch: "${params.BRANCH}", url: "${env.REPOSITORY}"
+    }
+
+    stage('Install FE node modules') {
+        //when { changeset "application/tabs/**" }
+        dir("application/tabs") {
+            sh "npm install"
+        }
+    }
+
+    stage('Setup FE env vars') {
+        //when { changeset "application/tabs/**" }
+        dir("application/tabs") {
+            //add more environemnts in this case for build time
+            sh "echo '' >> .env" //fix emptyline issue
+            sh "echo REACT_APP_BASE_URL=${backendDomain} >> .env"
+            script {
+                SSO_CLIENT_ID = sh(returnStdout: true, script: """aws ssm get-parameter \
+                --name \"/dummy-somes-app/${env.Environment}/sso_client_id\" \
+                --with-decryption \
+                --query Parameter.Value \
+                --output text \
+                --region eu-west-1""").trim()
+            }
+            //add more environemnts in this case for build time as jenkins credentials
+            // withCredentials([
+            //     string(credentialsId: "somes_proxy_azure_id_${env.Environment}", variable: 'AZURE_ID')
+            // ]) {
+            //     sh "echo REACT_APP_AZURE_APP_REGISTRATION_ID=${AZURE_ID} >> .env"
+            // }
+            sh "echo REACT_APP_AZURE_APP_REGISTRATION_ID=${SSO_CLIENT_ID} >> .env"
+        }
+    }
+
+    stage('Minify FE') {
+        //when { changeset "application/tabs/**" }
+        dir("application/tabs") {
+            sh "npm run build"
+        }
+    }
+
+    stage('Prepare') {
+        sh "npm install -g aws-cdk"
+        sh "npm install"
+    }
+
+    stage('Deploy CDK & Backend') {
+        withEnv(["CDK_DEPLOY_ENV=${env.Environment}"]) {
+            sh "cdk deploy --require-approval never --all"
+        }
+    }
+
+    stage('Deploy FE') {
+        //when { changeset "application/tabs/**" }
+        dir("application/tabs") {
+            sh "npm run deploy-${env.Environment}"
+        }
+    }
+}
